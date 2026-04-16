@@ -17,6 +17,8 @@ removed here.
 - Backpressure monitoring and HFT strategies
 - Ring sizing and cache impact on latency
 - Performance measurement (perf, sanitizers, built-in benchmarks)
+- CI/CD pipeline design (GitHub Actions) → `.github/workflows/ci.yml` created
+- Local git hooks → `scripts/hooks/pre-commit`, `pre-push`, `install-hooks.sh` created
 
 ---
 
@@ -108,6 +110,79 @@ removed here.
 
 ---
 
+## Ring Sizing & Cache Impact
+
+### Key insight: occupancy drives latency, not capacity
+- `capacity` is just the ceiling; `write_pos - read_pos` (occupancy) is the working set.
+- If occupancy stays at 3–5 slots, only those slots are hot in L1/L2. The rest of the
+  ring is cold and irrelevant.
+- A cache miss costs ~100 ns. High occupancy → producer writes to cold lines → latency spikes.
+
+### Cache math (64-byte messages)
+- `slot_stride = round_up(8 + 64, 64) = 128 bytes` — 50% padding waste
+- L1 (32 KB) fits 256 slots; L2 (256 KB) fits 2,048 slots; L3 (~12 MB) fits ~96K slots
+- Current default 64K ring @ 128 B/slot = 8 MB → spills out of L2
+
+### Slot stride waste
+- Design `msg_size` to be `(N × 64) - 8` to fill slots cleanly and halve cache footprint:
+  - 56 B msg → 64 B stride (0% waste)
+  - 120 B msg → 128 B stride (0% waste)
+  - 64 B msg → 128 B stride (50% waste ← current default)
+
+### Practical sizing rule
+- [ ] Never fill the ring in steady state — size for worst burst, not average load
+- [ ] Start with 1K–4K slots; increase only if drops appear during bursts
+- [ ] Keep occupancy < 10% of capacity as a health target
+- [ ] Tune msg_size to eliminate stride padding
+
+---
+
+## Performance Measurement
+
+### Layer 1 — built-in benchmarks (already present)
+- `bench_thread.cpp`: single-process two-thread throughput + P50/P90/P99/P99.9/max latency
+- `consumer_demo.cpp` + `producer_demo.cpp`: cross-process IPC latency
+- Run via `cmake --build build --target run_bench` / `run_ipc`
+
+### Layer 2 — `perf stat` (hardware counters)
+```bash
+perf stat -e cache-misses,cache-references,L1-dcache-load-misses,\
+LLC-load-misses,branch-misses,instructions,cycles \
+./build/bench 10000000 64 0 2
+```
+Key counters and what they reveal:
+
+| Counter | What it means |
+|---|---|
+| `L1-dcache-load-misses` | Ring working set too large for L1 |
+| `LLC-load-misses` | Severe cache thrashing — ring spills L3 |
+| `instructions/cycles` (IPC < 2.0) | Memory-bound stalls |
+| `branch-misses` | Mispredicted empty/full checks |
+
+### Layer 3 — flame graphs
+```bash
+perf record -g ./build/bench 10000000 64 0 2
+perf report
+```
+Requires `RelWithDebInfo` build to map addresses to function names.
+
+### CMake build presets (Phase 1)
+| Preset | Command | Use for |
+|---|---|---|
+| Release | `-DCMAKE_BUILD_TYPE=Release` | Throughput benchmarks |
+| RelWithDebInfo | `-DCMAKE_BUILD_TYPE=RelWithDebInfo` | `perf` profiling / flame graphs |
+| ASan | `-DSANITIZE=asan` | Memory safety, run all unit tests |
+| MSan | `-DSANITIZE=msan` | Uninitialised read detection |
+
+### Open questions on performance
+- [ ] What is the actual P99.9 target? (sub-1µs intra-process? sub-5µs IPC?)
+- [ ] Should latency histogram be percentile-sampled or full HDR histogram
+      (HdrHistogram avoids allocation on hot path)?
+- [ ] Add occupancy sampling to bench: record `write_pos - read_pos` every N
+      messages to build an occupancy histogram alongside the latency histogram.
+
+---
+
 ## Phase 3 — Production Hardening (future ideas)
 
 - `mlock()` shm segment — prevent page faults under memory pressure
@@ -116,6 +191,67 @@ removed here.
 - `CLOCK_MONOTONIC_RAW` — eliminate NTP jitter from latency measurements
 - `eventfd` backpressure signal — producer sleeps instead of burning a core
 - Lossy overwrite mode — per-slot generation counter, producer overwrites oldest
+
+---
+
+## CI/CD & Local Hooks
+
+### Recommended CI tool
+- **GitHub Actions** for cloud CI (free, Linux-native, matrix builds)
+- **Self-hosted runner** on dedicated hardware if perf benchmarks need to be in CI
+  (cloud runners have noisy neighbors — unreliable for latency regression gates)
+
+### Pipeline stages (GitHub Actions)
+```
+push / PR
+  ├─► [parallel] clang-format gate (fast, staged files only)
+  ├─► [parallel] build matrix: Debug / Release / RelWithDebInfo × clang + gcc
+  ├─► [after build] clang-tidy (needs compile_commands.json)
+  ├─► [parallel] unit tests — ASan build
+  ├─► [parallel] unit tests — MSan build
+  ├─► [on merge to main] benchmark smoke (throughput regression > 10% = fail)
+  └─► [after tests] /dev/shm leak check
+```
+
+### Local git hooks (committed, installed via script)
+Scripts live in `scripts/hooks/`, installed by `scripts/install-hooks.sh`.
+
+| Hook | Trigger | What runs | Speed |
+|---|---|---|---|
+| `pre-commit` | `git commit` | clang-format on staged files | <1s |
+| `pre-push` | `git push` | clang-tidy + ASan tests + shm cleanup | ~30s |
+
+Install once after cloning:
+```bash
+bash scripts/install-hooks.sh
+```
+
+### Can local machine replace CI?
+| Stage | Local | CI | Winner |
+|---|---|---|---|
+| clang-format | Yes | Yes | Either |
+| clang-tidy | Yes | Yes | Either |
+| ASan/MSan tests | Yes | Yes | Either |
+| `perf` profiling | **Yes** | No (blocked) | **Local** |
+| CPU pinning | **Yes** | No | **Local** |
+| Benchmark regression | **Yes** (less noise) | Unreliable | **Local** |
+| Multi-platform matrix | No | **Yes** | **CI** |
+
+Local = better for performance work. CI = better for correctness matrix and gating merges.
+
+### Required local tools
+```bash
+sudo apt install clang clang-format clang-tidy cmake ninja-build \
+    linux-tools-common linux-tools-$(uname -r)
+# Allow perf without root
+sudo sysctl kernel.perf_event_paranoid=1
+```
+
+### Open questions on CI/CD
+- [ ] Self-hosted runner needed for benchmark regression gate?
+- [ ] Add MSan to pre-push or keep it CI-only? (MSan requires clang, not all devs have it)
+- [ ] Benchmark baseline stored in repo (JSON) or fetched from CI artifact?
+- [ ] Add a `pre-receive` server-side hook to enforce format on the remote?
 
 ---
 
