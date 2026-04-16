@@ -1,0 +1,46 @@
+---
+# clang-format configuration for spsc_bus (HFT C++17)
+BasedOnStyle:  Google
+IndentWidth:   4
+ColumnLimit:   100
+
+# Brace style
+BreakBeforeBraces:             Attach
+BraceWrapping:
+  AfterClass:                  false
+  AfterFunction:               false
+  AfterNamespace:              false
+  AfterStruct:                 false
+
+# Alignment
+AlignConsecutiveAssignments:   Consecutive
+AlignConsecutiveDeclarations:  None
+AlignTrailingComments:
+  Kind:                        Always
+  OverEmptyLines:              1
+
+# Pointers / references
+PointerAlignment:              Right
+ReferenceAlignment:            Right
+
+# Include sorting
+SortIncludes:                  CaseInsensitive
+IncludeBlocks:                 Regroup
+IncludeCategories:
+  # Project headers first
+  - Regex:    '^"'
+    Priority: 1
+  # System C++ headers
+  - Regex:    '^<[a-z_]+>'
+    Priority: 2
+  # POSIX / platform headers
+  - Regex:    '^<'
+    Priority: 3
+
+# Misc
+AllowShortFunctionsOnASingleLine:   Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine:       false
+SpaceBeforeParens:                  ControlStatements
+Cpp11BracedListStyle:               true
+DerivePointerAlignment:             false

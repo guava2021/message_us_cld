@@ -1,0 +1,50 @@
+---
+# clang-tidy configuration — C++ Core Guidelines for HFT C++17
+#
+# Disabled checks and rationale:
+#   cppcoreguidelines-avoid-magic-numbers   — HFT constants (kCacheLine, kMagic, etc.) are intentional
+#   cppcoreguidelines-pro-type-reinterpret-cast — required for shm slot pointer arithmetic
+#   cppcoreguidelines-pro-bounds-pointer-arithmetic — required for slot_ptr()
+#   cppcoreguidelines-pro-bounds-array-to-pointer-decay — used in memcpy / C interop
+#   cppcoreguidelines-avoid-c-arrays        — cache-aligned padding arrays are intentional
+#   modernize-use-trailing-return-type      — style preference, not enforced
+#   readability-magic-numbers               — same as avoid-magic-numbers
+#   readability-identifier-length           — short names (_pad, cb, sz) are idiomatic here
+#   bugprone-easily-swappable-parameters    — too noisy for low-level APIs
+
+Checks: >
+  clang-diagnostic-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  bugprone-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-pro-type-vararg,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -bugprone-easily-swappable-parameters
+
+WarningsAsErrors: >
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-slicing,
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  performance-move-const-arg,
+  modernize-use-nullptr,
+  modernize-use-override
+
+HeaderFilterRegex: "spsc_bus\\.hpp"
+
+CheckOptions:
+  - key:   readability-braces-around-statements.ShortStatementLines
+    value: "2"
+  - key:   modernize-use-default-member-init.UseAssignment
+    value: "true"
+  - key:   cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: "true"
