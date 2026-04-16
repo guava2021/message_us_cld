@@ -151,3 +151,88 @@ makes slot contents visible across cores without additional fences.
 - **No flow control beyond spinning.**  A persistently full ring will keep the
   producer spinning indefinitely.  Add a timeout or backpressure signal if
   needed.
+- **Producer must start first.**  `SharedBus::open()` throws immediately on
+  `ENOENT` if the producer has not yet called `create()`.  No retry logic exists.
+
+---
+
+## Roadmap
+
+### Phase 1 — Code Quality (immediate)
+
+| Task | Detail |
+|---|---|
+| Fix C++ standard | `CMakeLists.txt` declares C++20; CLAUDE.md requires C++17. Change `CMAKE_CXX_STANDARD` to 17. |
+| Add `.clang-format` | Google or LLVM base style, 4-space indent, 100-column limit. |
+| Add `.clang-tidy` | Enable `cppcoreguidelines-*`, `modernize-*`, `performance-*`, `readability-*`. Wire into CMake via `CMAKE_CXX_CLANG_TIDY`. |
+| Sanitizer build targets | `cmake -DSANITIZE=asan` → `-fsanitize=address,undefined`. `cmake -DSANITIZE=msan` → `-fsanitize=memory`. Always run unit tests under ASan before merge. |
+| `perf` profiling preset | `cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo` — keeps debug symbols for `perf report` / flame graphs. Without this, `perf` shows raw addresses. |
+| Unit tests | Add test binary (Catch2 or Google Test) covering the cases below. |
+
+**Required unit test cases:**
+
+| Test | Edge case |
+|---|---|
+| Basic push/pop round-trip | zero-length guard, max_msg_size boundary |
+| Ring index wraps correctly | capacity-1 and capacity slots in flight |
+| Ring full → `try_push` returns false | exactly at capacity boundary |
+| Ring empty → `try_pop` returns 0 | first pop on fresh bus |
+| Non-power-of-2 capacity → throws | 0, 1, 3, 5, 1023 |
+| `max_msg_size=0` → throws | |
+| Message larger than `max_msg_size` → rejected | size == max+1 |
+| Consumer-first open → spins until producer inits | via two threads |
+| Ordering: all sent bytes arrive in order | 1 M message stress pass |
+
+---
+
+### Phase 2 — Recovery & Fault Tolerance
+
+**A. Producer crash detection**
+
+Problem: if the producer process dies, `write_pos` freezes and the consumer
+spins forever on an empty ring.
+
+Fix: add `producer_pid` and `producer_heartbeat_ts` fields to `ControlBlock`.
+The consumer periodically checks `kill(producer_pid, 0)` — if it returns
+`ESRCH`, the producer is dead.  The consumer can then abort, reconnect, or
+raise an alert.
+
+**B. Consumer crash detection**
+
+Problem: if the consumer process dies, `read_pos` freezes, the ring fills, and
+the producer spins forever on a full ring.
+
+Fix: add `consumer_pid` and `consumer_heartbeat_ts` to `ControlBlock`.  The
+producer detects the dead consumer and can choose to drop messages (lossy mode)
+or abort.
+
+**C. Stale shared-memory segment on restart**
+
+Problem: a leftover shm segment from a previous run passes the `magic` check
+but contains stale `write_pos`/`read_pos` values or old message data.
+
+Fix: add a `session_id` (random 64-bit value written at `create()`) to
+`ControlBlock`.  Both sides record the expected `session_id`; a mismatch on
+`open()` triggers an error or re-creation.
+
+**D. Consumer-first startup**
+
+Problem: `shm_open(O_RDWR)` in `open()` fails immediately with `ENOENT` if the
+producer has not yet called `create()`.
+
+Fix: wrap `shm_open` in a retry loop with a configurable timeout.  Also guard
+the `fstat` size check against the window between `shm_open` and `ftruncate`
+on the producer side (size may be 0 momentarily).
+
+---
+
+### Phase 3 — Production Hardening (future)
+
+| Item | Rationale |
+|---|---|
+| `mlock()` the shm segment | Prevent page faults on the hot path under memory pressure. |
+| `MAP_HUGETLB` | Reduce TLB pressure for large rings (≥ 2 MB). |
+| CPU affinity helpers | Expose `pthread_setaffinity_np` wrappers in the demo; pin producer and consumer to isolated physical cores. |
+| `CLOCK_MONOTONIC_RAW` | Eliminate NTP-induced jitter from latency measurements. |
+| Backpressure signal via `eventfd` | Allow a full-ring producer to sleep instead of burning a core, for mixed-criticality deployments. |
+| Lossy / overwrite mode | Optional flag to let the producer overwrite the oldest unread slot; requires per-slot generation counter in `SlotHeader._pad`. |
