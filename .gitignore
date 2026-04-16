@@ -1,3 +1,36 @@
+# ── CMake build directories ───────────────────────────────────────────────────
 build/
+build_*/          # build_asan, build_msan, build_gtest, build_tsan, etc.
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# ── compiled binaries ─────────────────────────────────────────────────────────
+producer
+consumer
+bench
+tests
+
+# ── sanitizer / profiling artifacts ──────────────────────────────────────────
+*.asan
+*.msan
+*.profraw
+*.profdata
+perf.data
+perf.data.old
+
+# ── editor / OS ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── clang tooling output ──────────────────────────────────────────────────────
+*.orig            # clang-tidy --fix backups
+
+# ── local tooling ─────────────────────────────────────────────────────────────
 .claude/
 .cache/
