@@ -1,0 +1,61 @@
+#!/bin/bash
+# pre-push: full gate before code leaves the local machine.
+# Slower (~30s) — runs on every push.
+#
+# Runs:
+#   1. clang-tidy static analysis
+#   2. ASan + UBSan unit tests
+#   3. /dev/shm leak cleanup
+#
+# Install: scripts/install-hooks.sh
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+BUILD_DIR="$REPO_ROOT/build"
+BUILD_ASAN_DIR="$REPO_ROOT/build_asan"
+
+echo "[pre-push] Starting pre-push checks..."
+
+# ── 1. clang-tidy ─────────────────────────────────────────────────────────────
+if command -v clang-tidy &>/dev/null; then
+    if [ -f "$BUILD_DIR/compile_commands.json" ]; then
+        echo "[pre-push] Running clang-tidy..."
+        find "$REPO_ROOT" -maxdepth 1 -name '*.cpp' | \
+            xargs clang-tidy -p "$BUILD_DIR" --quiet
+        echo "[pre-push] clang-tidy: OK"
+    else
+        echo "[pre-push] WARNING: compile_commands.json not found in $BUILD_DIR — skipping clang-tidy"
+        echo "           Run: cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -B build ."
+    fi
+else
+    echo "[pre-push] WARNING: clang-tidy not found — skipping"
+fi
+
+# ── 2. ASan + UBSan unit tests ────────────────────────────────────────────────
+if command -v cmake &>/dev/null; then
+    echo "[pre-push] Building with ASan + UBSan..."
+    cmake -S "$REPO_ROOT" -B "$BUILD_ASAN_DIR" \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DSANITIZE=asan \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
+        -Wno-dev \
+        > /dev/null 2>&1
+    cmake --build "$BUILD_ASAN_DIR" --parallel > /dev/null 2>&1
+    echo "[pre-push] Running unit tests under ASan..."
+    cd "$BUILD_ASAN_DIR" && ctest --output-on-failure --timeout 60
+    cd "$REPO_ROOT"
+    echo "[pre-push] ASan tests: OK"
+else
+    echo "[pre-push] WARNING: cmake not found — skipping ASan tests"
+fi
+
+# ── 3. /dev/shm leak cleanup ─────────────────────────────────────────────────
+leaked=$(ls /dev/shm/spsc_* 2>/dev/null || true)
+if [ -n "$leaked" ]; then
+    echo "[pre-push] WARNING: leaked shm segments found — cleaning up:"
+    echo "$leaked"
+    rm -f /dev/shm/spsc_*
+fi
+
+echo "[pre-push] All checks passed."

@@ -15,10 +15,11 @@
 #include <cstring>
 #include <ctime>
 #include <numeric>
-#include <pthread.h>
-#include <sched.h>
 #include <thread>
 #include <vector>
+
+#include <pthread.h>
+#include <sched.h>
 
 // ── timing ───────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,8 @@ static uint64_t now_ns() {
 // ── cpu pinning ───────────────────────────────────────────────────────────────
 
 static bool pin_to_core(int core) {
-    if (core < 0) return true;
+    if (core < 0)
+        return true;
     cpu_set_t cs;
     CPU_ZERO(&cs);
     CPU_SET(core, &cs);
@@ -48,36 +50,37 @@ static bool pin_to_core(int core) {
 
 struct alignas(8) Msg {
     uint64_t send_ts_ns;
-    char     payload[1];
+    char payload[1];
 };
 
 // ── shared state between threads ──────────────────────────────────────────────
 
 struct BenchState {
-    spsc::SharedBus*  bus;
-    uint64_t          n_msgs;
-    uint32_t          msg_size;
-    int               prod_core;
-    int               cons_core;
+    spsc::SharedBus *bus;
+    uint64_t n_msgs;
+    uint32_t msg_size;
+    int prod_core;
+    int cons_core;
     std::atomic<bool> ready{false};
 
     // Results
     std::vector<uint64_t> latencies;
-    double                prod_elapsed_s{0};
+    double prod_elapsed_s{0};
 };
 
 // ── producer thread ───────────────────────────────────────────────────────────
 
-static void producer_fn(BenchState* s) {
+static void producer_fn(BenchState *s) {
     pin_to_core(s->prod_core);
 
     spsc::Producer prod(*s->bus);
-    auto* msg = static_cast<Msg*>(std::aligned_alloc(8, s->msg_size));
+    auto *msg = static_cast<Msg *>(std::aligned_alloc(8, s->msg_size));
     std::memset(msg, 0, s->msg_size);
 
     // Signal ready and wait for consumer to be ready too.
     s->ready.store(true, std::memory_order_release);
-    while (!s->ready.load(std::memory_order_acquire)) { /* spin */ }
+    while (!s->ready.load(std::memory_order_acquire)) { /* spin */
+    }
 
     uint64_t t0 = now_ns();
     for (uint64_t i = 0; i < s->n_msgs; ++i) {
@@ -91,21 +94,22 @@ static void producer_fn(BenchState* s) {
 
 // ── consumer thread ───────────────────────────────────────────────────────────
 
-static void consumer_fn(BenchState* s) {
+static void consumer_fn(BenchState *s) {
     pin_to_core(s->cons_core);
 
     spsc::Consumer cons(*s->bus);
-    auto* buf = static_cast<Msg*>(std::aligned_alloc(8, s->msg_size));
+    auto *buf = static_cast<Msg *>(std::aligned_alloc(8, s->msg_size));
 
     s->latencies.resize(s->n_msgs);
 
     // Wait for producer ready flag.
-    while (!s->ready.load(std::memory_order_acquire)) { /* spin */ }
+    while (!s->ready.load(std::memory_order_acquire)) { /* spin */
+    }
 
     for (uint64_t i = 0; i < s->n_msgs; ++i) {
         cons.pop(buf, s->msg_size);
         uint64_t recv_ts = now_ns();
-        s->latencies[i] = recv_ts - buf->send_ts_ns;
+        s->latencies[i]  = recv_ts - buf->send_ts_ns;
     }
 
     std::free(buf);
@@ -113,22 +117,24 @@ static void consumer_fn(BenchState* s) {
 
 // ── main ──────────────────────────────────────────────────────────────────────
 
-static void print_pct(std::vector<uint64_t>& v, const char* tag, double pct) {
+static void print_pct(std::vector<uint64_t> &v, const char *tag, double pct) {
     size_t idx = size_t(pct / 100.0 * double(v.size()));
-    if (idx >= v.size()) idx = v.size() - 1;
+    if (idx >= v.size())
+        idx = v.size() - 1;
     printf("  %-8s %6llu ns\n", tag, (unsigned long long)v[idx]);
 }
 
-int main(int argc, char** argv) {
-    uint64_t n_msgs    = (argc > 1) ? std::strtoull(argv[1], nullptr, 10) : 10'000'000;
-    uint32_t msg_size  = (argc > 2) ? uint32_t(std::strtoul(argv[2], nullptr, 10)) : 64u;
-    int      prod_core = (argc > 3) ? std::atoi(argv[3]) : 0;
-    int      cons_core = (argc > 4) ? std::atoi(argv[4]) : 2;
+int main(int argc, char **argv) {
+    uint64_t n_msgs   = (argc > 1) ? std::strtoull(argv[1], nullptr, 10) : 10'000'000;
+    uint32_t msg_size = (argc > 2) ? uint32_t(std::strtoul(argv[2], nullptr, 10)) : 64u;
+    int prod_core     = (argc > 3) ? std::atoi(argv[3]) : 0;
+    int cons_core     = (argc > 4) ? std::atoi(argv[4]) : 2;
 
-    if (msg_size < sizeof(uint64_t)) msg_size = sizeof(uint64_t);
+    if (msg_size < sizeof(uint64_t))
+        msg_size = sizeof(uint64_t);
 
     constexpr uint32_t kCapacity = 64 * 1024;
-    const char*        kBusName  = "/spsc_bench_internal";
+    const char *kBusName         = "/spsc_bench_internal";
 
     printf("=== SPSC bench (in-process, two threads) ===\n");
     printf("  messages   : %llu\n", (unsigned long long)n_msgs);
@@ -147,27 +153,27 @@ int main(int argc, char** argv) {
     state.cons_core = cons_core;
 
     std::thread cons_thr(consumer_fn, &state);
-    producer_fn(&state);         // run producer on calling thread
+    producer_fn(&state);  // run producer on calling thread
     cons_thr.join();
 
     spsc::SharedBus::unlink(kBusName);
 
     // ── report ────────────────────────────────────────────────────────────────
-    auto& lat = state.latencies;
+    auto &lat = state.latencies;
     std::sort(lat.begin(), lat.end());
     double mean_ns = double(std::accumulate(lat.begin(), lat.end(), uint64_t(0))) / double(n_msgs);
     double tput    = double(n_msgs) / state.prod_elapsed_s;
 
-    printf("Throughput : %.2f M msgs/s  (%.2f MB/s)\n",
-           tput / 1e6, tput * msg_size / (1024.0 * 1024.0));
+    printf("Throughput : %.2f M msgs/s  (%.2f MB/s)\n", tput / 1e6,
+           tput * msg_size / (1024.0 * 1024.0));
     printf("\nOne-way latency:\n");
-    printf("  %-8s %6llu ns\n", "min",  (unsigned long long)lat.front());
+    printf("  %-8s %6llu ns\n", "min", (unsigned long long)lat.front());
     printf("  %-8s %6.0f ns\n", "mean", mean_ns);
-    print_pct(lat, "p50",   50.0);
-    print_pct(lat, "p90",   90.0);
-    print_pct(lat, "p99",   99.0);
+    print_pct(lat, "p50", 50.0);
+    print_pct(lat, "p90", 90.0);
+    print_pct(lat, "p99", 99.0);
     print_pct(lat, "p99.9", 99.9);
-    printf("  %-8s %6llu ns\n", "max",  (unsigned long long)lat.back());
+    printf("  %-8s %6llu ns\n", "max", (unsigned long long)lat.back());
 
     return 0;
 }

@@ -1,6 +1,7 @@
 # ── CMake build directories ───────────────────────────────────────────────────
 build/
-build_*/          # build_asan, build_msan, build_gtest, build_tsan, etc.
+# build_asan, build_msan, build_gtest, build_tsan, etc.
+build_*/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake

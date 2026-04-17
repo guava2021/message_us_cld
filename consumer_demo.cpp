@@ -21,25 +21,28 @@ static uint64_t now_ns() {
 
 struct alignas(8) MsgLayout {
     uint64_t send_ts_ns;
-    char     payload[1];
+    char payload[1];
 };
 
-static void print_percentile(std::vector<uint64_t>& v, double pct) {
-    if (v.empty()) return;
+static void print_percentile(std::vector<uint64_t> &v, double pct) {
+    if (v.empty())
+        return;
     size_t idx = size_t(pct / 100.0 * double(v.size()));
-    if (idx >= v.size()) idx = v.size() - 1;
+    if (idx >= v.size())
+        idx = v.size() - 1;
     printf("  p%-5.2g = %6llu ns\n", pct, (unsigned long long)v[idx]);
 }
 
-int main(int argc, char** argv) {
-    const char* name     = (argc > 1) ? argv[1] : "/spsc_demo";
-    uint64_t    n_msgs   = (argc > 2) ? std::strtoull(argv[2], nullptr, 10) : 5'000'000;
-    uint32_t    msg_size = (argc > 3) ? uint32_t(std::strtoul(argv[3], nullptr, 10)) : 64u;
+int main(int argc, char **argv) {
+    const char *name  = (argc > 1) ? argv[1] : "/spsc_demo";
+    uint64_t n_msgs   = (argc > 2) ? std::strtoull(argv[2], nullptr, 10) : 5'000'000;
+    uint32_t msg_size = (argc > 3) ? uint32_t(std::strtoul(argv[3], nullptr, 10)) : 64u;
 
-    if (msg_size < sizeof(uint64_t)) msg_size = sizeof(uint64_t);
+    if (msg_size < sizeof(uint64_t))
+        msg_size = sizeof(uint64_t);
 
-    printf("[consumer] bus='%s'  n=%llu  msg_size=%u\n",
-           name, (unsigned long long)n_msgs, msg_size);
+    printf("[consumer] bus='%s'  n=%llu  msg_size=%u\n", name, (unsigned long long)n_msgs,
+           msg_size);
     fflush(stdout);
 
     // Retry open — producer may not have created the segment yet.
@@ -49,7 +52,9 @@ int main(int argc, char** argv) {
                 return spsc::SharedBus::open(name);
             } catch (...) {
                 // shm not created yet — spin
-                struct timespec ts{ .tv_sec = 0, .tv_nsec = 1'000'000 };
+                struct timespec ts {
+                    .tv_sec = 0, .tv_nsec = 1'000'000
+                };
                 nanosleep(&ts, nullptr);
             }
         }
@@ -57,8 +62,11 @@ int main(int argc, char** argv) {
 
     spsc::Consumer cons(bus);
 
-    auto* buf = static_cast<MsgLayout*>(std::aligned_alloc(8, msg_size));
-    if (!buf) { perror("aligned_alloc"); return 1; }
+    auto *buf = static_cast<MsgLayout *>(std::aligned_alloc(8, msg_size));
+    if (!buf) {
+        perror("aligned_alloc");
+        return 1;
+    }
 
     std::vector<uint64_t> latencies;
     latencies.reserve(n_msgs);
@@ -68,7 +76,7 @@ int main(int argc, char** argv) {
     for (uint64_t i = 0; i < n_msgs; ++i) {
         cons.pop(buf, msg_size);
         uint64_t recv_ts = now_ns();
-        uint64_t lat = recv_ts - buf->send_ts_ns;
+        uint64_t lat     = recv_ts - buf->send_ts_ns;
         latencies.push_back(lat);
     }
 
@@ -78,7 +86,8 @@ int main(int argc, char** argv) {
     // Stats
     std::sort(latencies.begin(), latencies.end());
     uint64_t sum = 0;
-    for (uint64_t l : latencies) sum += l;
+    for (uint64_t l : latencies)
+        sum += l;
 
     double elapsed_s  = double(t1 - t0) / 1e9;
     double throughput = double(n_msgs) / elapsed_s;

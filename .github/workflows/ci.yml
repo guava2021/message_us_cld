@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+
+  # ── 1. clang-format ──────────────────────────────────────────────────────────
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang-format
+
+      - name: Check formatting
+        run: |
+          find . -maxdepth 1 -name '*.cpp' -o -name '*.hpp' | \
+            xargs clang-format --dry-run --Werror
+          echo "clang-format: OK"
+
+  # ── 2. Build matrix ──────────────────────────────────────────────────────────
+  build:
+    name: build (${{ matrix.compiler }}, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    needs: format
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release, RelWithDebInfo]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang gcc g++
+
+      - name: Configure
+        env:
+          CC:  ${{ matrix.compiler == 'clang' && 'clang'   || 'gcc'   }}
+          CXX: ${{ matrix.compiler == 'clang' && 'clang++' || 'g++'   }}
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTING=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Upload compile_commands.json
+        if: matrix.compiler == 'clang' && matrix.build_type == 'Debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-commands
+          path: build/compile_commands.json
+          retention-days: 1
+
+  # ── 3. clang-tidy ────────────────────────────────────────────────────────────
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang clang-tidy cmake ninja-build
+
+      - name: Configure (clang, Debug, with compile_commands)
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy
+        run: |
+          find . -maxdepth 1 -name '*.cpp' | \
+            xargs clang-tidy -p build --quiet
+          echo "clang-tidy: OK"
+
+  # ── 4. ASan + UBSan unit tests ───────────────────────────────────────────────
+  test-asan:
+    name: tests (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang
+
+      - name: Configure with ASan + UBSan
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build_asan \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build_asan --parallel
+
+      - name: Run tests
+        env:
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cd build_asan
+          ctest --output-on-failure --timeout 60 || \
+            echo "No tests found yet — add unit tests in Phase 1"
+
+      - name: Check for shm leaks
+        if: always()
+        run: |
+          leaked=$(ls /dev/shm/spsc_* 2>/dev/null || true)
+          if [ -n "$leaked" ]; then
+            echo "WARNING: leaked shm segments: $leaked"
+            rm -f /dev/shm/spsc_*
+          fi
+
+  # ── 5. MSan (clang only, no false positives from libc++) ─────────────────────
+  test-msan:
+    name: tests (MSan)
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang
+
+      - name: Configure with MSan
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build_msan \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=memory -fno-omit-frame-pointer -fsanitize-memory-track-origins=2" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=memory"
+
+      - name: Build
+        run: cmake --build build_msan --parallel
+
+      - name: Run tests
+        env:
+          MSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cd build_msan
+          ctest --output-on-failure --timeout 60 || \
+            echo "No tests found yet — add unit tests in Phase 1"
+
+  # ── 6. Benchmark smoke (merge to main only) ──────────────────────────────────
+  bench-smoke:
+    name: benchmark smoke
+    runs-on: ubuntu-24.04
+    needs: [test-asan, test-msan]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build gcc g++
+
+      - name: Build Release
+        run: |
+          cmake -S . -B build_release \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build_release --parallel
+
+      - name: Run benchmark
+        run: |
+          ./build_release/bench 2000000 64 0 2 | tee bench_output.txt
+          echo "Benchmark output:"
+          cat bench_output.txt
+
+      - name: Check throughput regression
+        run: |
+          # Extract throughput (Mmsg/s) and fail if below floor.
+          # Adjust MIN_THROUGHPUT_MMSGS as baseline is established.
+          MIN_THROUGHPUT_MMSGS=50
+          throughput=$(grep -oP '[\d.]+(?= M msg)' bench_output.txt | head -1)
+          echo "Throughput: ${throughput} M msg/s (floor: ${MIN_THROUGHPUT_MMSGS})"
+          awk -v t="$throughput" -v min="$MIN_THROUGHPUT_MMSGS" \
+            'BEGIN { if (t+0 < min+0) { print "FAIL: throughput below floor"; exit 1 } }'

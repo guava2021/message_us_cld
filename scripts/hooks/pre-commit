@@ -1,0 +1,33 @@
+#!/bin/bash
+# pre-commit: clang-format check on staged .cpp/.hpp files only.
+# Fast (<1s) — runs on every commit.
+#
+# Install: scripts/install-hooks.sh
+
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(cpp|hpp)$' || true)
+
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+if ! command -v clang-format &>/dev/null; then
+    echo "[pre-commit] clang-format not found — skipping format check"
+    exit 0
+fi
+
+failed=0
+for f in $staged; do
+    if ! clang-format --dry-run --Werror "$f" 2>/dev/null; then
+        echo "[pre-commit] FAIL: $f is not formatted. Run: clang-format -i $f"
+        failed=1
+    fi
+done
+
+if [ $failed -ne 0 ]; then
+    echo "[pre-commit] Fix formatting errors above, then re-stage and commit."
+    exit 1
+fi
+
+echo "[pre-commit] clang-format: OK"

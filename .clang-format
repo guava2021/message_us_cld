@@ -15,9 +15,7 @@ BraceWrapping:
 # Alignment
 AlignConsecutiveAssignments:   Consecutive
 AlignConsecutiveDeclarations:  None
-AlignTrailingComments:
-  Kind:                        Always
-  OverEmptyLines:              1
+AlignTrailingComments:         true
 
 # Pointers / references
 PointerAlignment:              Right
