@@ -49,7 +49,10 @@ run_act() {
         --platform ubuntu-24.04="$RUNNER_IMAGE" \
         --artifact-server-path /tmp/act-artifacts \
         --pull=false \
+        --jobs=1 \
         --rm
+    # --jobs=1: serialize all jobs so they don't stomp each other's build dirs.
+    # On GitHub Actions each job gets an isolated VM; act shares the host filesystem.
 }
 
 case "${1:-all}" in
