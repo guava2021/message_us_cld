@@ -48,6 +48,7 @@ run_act() {
     "$ACT" "$@" \
         --platform ubuntu-24.04="$RUNNER_IMAGE" \
         --artifact-server-path /tmp/act-artifacts \
+        --pull=false \
         --rm
 }
 

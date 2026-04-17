@@ -125,12 +125,12 @@ jobs:
 
       - name: Run tests
         env:
-          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+          # detect_leaks=0: LeakSanitizer requires /proc access unavailable in Docker
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=0
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           cd build_asan
-          ctest --output-on-failure --timeout 60 || \
-            echo "No tests found yet — add unit tests in Phase 1"
+          ctest --output-on-failure --timeout 60
 
       - name: Check for shm leaks
         if: always()
@@ -177,8 +177,7 @@ jobs:
           MSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           cd build_msan
-          ctest --output-on-failure --timeout 60 || \
-            echo "No tests found yet — add unit tests in Phase 1"
+          ctest --output-on-failure --timeout 60
 
   # ── 6. Benchmark smoke (merge to main only) ──────────────────────────────────
   bench-smoke:
