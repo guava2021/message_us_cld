@@ -141,11 +141,15 @@ jobs:
             rm -f /dev/shm/spsc_*
           fi
 
-  # ── 5. MSan (clang only, no false positives from libc++) ─────────────────────
+  # ── 5. MSan (clang only) ──────────────────────────────────────────────────────
+  # NOTE: continue-on-error because MSan requires a fully instrumented libc++.
+  # Standard Ubuntu clang packages use uninstrumented libstdc++, causing false
+  # positives in gtest_discover_tests. Run MSan locally with a custom libc++.
   test-msan:
     name: tests (MSan)
     runs-on: ubuntu-24.04
     needs: build
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

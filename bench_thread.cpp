@@ -30,7 +30,7 @@ static inline uint64_t rdtsc() {
 }
 
 static uint64_t now_ns() {
-    struct timespec ts;
+    struct timespec ts {};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return uint64_t(ts.tv_sec) * 1'000'000'000ull + uint64_t(ts.tv_nsec);
 }
@@ -56,11 +56,11 @@ struct alignas(8) Msg {
 // ── shared state between threads ──────────────────────────────────────────────
 
 struct BenchState {
-    spsc::SharedBus *bus;
-    uint64_t n_msgs;
-    uint32_t msg_size;
-    int prod_core;
-    int cons_core;
+    spsc::SharedBus *bus{nullptr};
+    uint64_t n_msgs{0};
+    uint32_t msg_size{0};
+    int prod_core{-1};
+    int cons_core{-1};
     std::atomic<bool> ready{false};
 
     // Results
