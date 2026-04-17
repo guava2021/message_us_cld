@@ -80,7 +80,10 @@ if(BUILD_TESTING)
     target_link_libraries(tests PRIVATE spsc_bus GTest::gtest_main ${SPSC_LINK_LIBS})
 
     include(GoogleTest)
-    gtest_discover_tests(tests)
+    # PRE_TEST: run test binary for discovery at ctest time, not during cmake --build.
+    # This ensures ASAN_OPTIONS/LSAN_OPTIONS are set before the binary runs, avoiding
+    # the LeakSanitizer SEGFAULT on /proc/self/maps in Docker containers.
+    gtest_discover_tests(tests DISCOVERY_MODE PRE_TEST)
 endif()
 
 # ── convenience targets ───────────────────────────────────────────────────────
