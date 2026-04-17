@@ -5,6 +5,15 @@
 // ASan:   cmake -B build_asan -DBUILD_TESTING=ON -DSANITIZE=asan
 //         cmake --build build_asan && ctest --test-dir build_asan
 
+// ASan: disable LeakSanitizer — it requires /proc/self/maps which is
+// unavailable inside Docker containers (used by both local CI and GitHub Actions).
+// The name __asan_default_options is a well-known ASan hook and must use this
+// exact reserved identifier; suppress the clang-tidy warning intentionally.
+// NOLINTNEXTLINE(bugprone-reserved-identifier)
+extern "C" const char *__asan_default_options() {
+    return "detect_leaks=0";
+}
+
 #include "spsc_bus.hpp"
 
 #include <atomic>

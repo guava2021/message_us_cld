@@ -124,11 +124,11 @@ jobs:
         run: cmake --build build_asan --parallel
 
       - name: Run tests
-        env:
-          # detect_leaks=0: LeakSanitizer requires /proc access unavailable in Docker
-          ASAN_OPTIONS: halt_on_error=1:detect_leaks=0
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
+          # detect_leaks=0: LeakSanitizer requires /proc access unavailable in Docker.
+          # Set via export (not env: block) to guarantee act passes them to ctest.
+          export ASAN_OPTIONS="detect_leaks=0:halt_on_error=1"
+          export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
           cd build_asan
           ctest --output-on-failure --timeout 60
 
