@@ -79,11 +79,17 @@ if(BUILD_TESTING)
     add_executable(tests tests/test_spsc_bus.cpp)
     target_link_libraries(tests PRIVATE spsc_bus GTest::gtest_main ${SPSC_LINK_LIBS})
 
-    include(GoogleTest)
-    # PRE_TEST: run test binary for discovery at ctest time, not during cmake --build.
-    # This ensures ASAN_OPTIONS/LSAN_OPTIONS are set before the binary runs, avoiding
-    # the LeakSanitizer SEGFAULT on /proc/self/maps in Docker containers.
-    gtest_discover_tests(tests DISCOVERY_MODE PRE_TEST)
+    if(SANITIZE)
+        # gtest_discover_tests runs the binary via cmake execute_process which causes
+        # ASan shadow-memory init to SEGFAULT in Docker containers (bind-mounted paths).
+        # Use add_test directly for sanitizer builds — all tests still run, just as one
+        # ctest entry. Non-sanitizer builds use full per-test discovery for granularity.
+        add_test(NAME SpscBusTests COMMAND tests)
+        set_tests_properties(SpscBusTests PROPERTIES TIMEOUT 120)
+    else()
+        include(GoogleTest)
+        gtest_discover_tests(tests)
+    endif()
 endif()
 
 # ── convenience targets ───────────────────────────────────────────────────────
