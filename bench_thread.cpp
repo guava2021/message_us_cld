@@ -3,74 +3,25 @@
 // The producer and consumer are pinned to adjacent cores (configurable).
 // Both use spinning for minimal latency.
 //
-// Timing: RDTSCP for per-message latency (invariant TSC, ~2ns overhead).
+// Timing: tsc::TscClock (RDTSCP, ~5 cycles) for per-message latency.
 // TSC frequency is calibrated once at startup against CLOCK_MONOTONIC_RAW.
 //
 // Usage:  ./bench [n_messages] [msg_size] [producer_core] [consumer_core]
 //   e.g.  ./bench 10000000 64 0 2
 
 #include "spsc_bus.hpp"
+#include "tsc_clock.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <thread>
 #include <vector>
 
 #include <pthread.h>
 #include <sched.h>
-
-// ── TSC timing ────────────────────────────────────────────────────────────────
-//
-// RDTSCP serializes instruction retirement before reading the counter,
-// giving accurate per-message timestamps without full CPUID serialisation.
-// Requires constant_tsc + nonstop_tsc (verified in main).
-
-static inline uint64_t rdtscp() {
-    uint32_t lo, hi, aux;
-    __asm__ volatile("rdtscp" : "=a"(lo), "=d"(hi), "=c"(aux));
-    return (uint64_t(hi) << 32) | lo;
-}
-
-// Calibrate TSC frequency by correlating TSC ticks against CLOCK_MONOTONIC_RAW
-// over a short busy-spin interval. Returns ticks per nanosecond as a double.
-static double calibrate_tsc_ghz() {
-    // Warm up.
-    rdtscp();
-
-    struct timespec t0 {
-    }, t1{};
-    clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
-    uint64_t tsc0 = rdtscp();
-
-    // Spin for ~50ms to get a stable measurement.
-    struct timespec target = t0;
-    target.tv_nsec += 50'000'000;
-    if (target.tv_nsec >= 1'000'000'000) {
-        target.tv_nsec -= 1'000'000'000;
-        target.tv_sec += 1;
-    }
-    do {
-        clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
-    } while (t1.tv_sec < target.tv_sec ||
-             (t1.tv_sec == target.tv_sec && t1.tv_nsec < target.tv_nsec));
-
-    uint64_t tsc1 = rdtscp();
-
-    uint64_t elapsed_ns = uint64_t(t1.tv_sec - t0.tv_sec) * 1'000'000'000ULL +
-                          uint64_t(t1.tv_nsec) - uint64_t(t0.tv_nsec);
-    uint64_t elapsed_tsc = tsc1 - tsc0;
-
-    return double(elapsed_tsc) / double(elapsed_ns);  // ticks per ns (GHz)
-}
-
-// Convert TSC delta to nanoseconds.
-static inline double tsc_to_ns(uint64_t ticks, double tsc_ghz) {
-    return double(ticks) / tsc_ghz;
-}
 
 // ── cpu pinning ───────────────────────────────────────────────────────────────
 
@@ -98,10 +49,10 @@ struct BenchState {
     uint32_t msg_size{0};
     int prod_core{-1};
     int cons_core{-1};
-    double tsc_ghz{1.0};
+    tsc::TscClock *clk{nullptr};
     std::atomic<bool> ready{false};
 
-    // Results (filled by consumer)
+    // Results (filled by threads)
     std::vector<uint64_t> latency_tsc;
     double prod_elapsed_ns{0};
 };
@@ -119,12 +70,12 @@ static void producer_fn(BenchState *s) {
     while (!s->ready.load(std::memory_order_acquire)) { /* spin */
     }
 
-    uint64_t t0 = rdtscp();
+    uint64_t t0 = tsc::TscClock::now_tsc();
     for (uint64_t i = 0; i < s->n_msgs; ++i) {
-        msg->send_tsc = rdtscp();
+        msg->send_tsc = tsc::TscClock::now_tsc();
         prod.push(msg, s->msg_size);
     }
-    s->prod_elapsed_ns = tsc_to_ns(rdtscp() - t0, s->tsc_ghz);
+    s->prod_elapsed_ns = s->clk->delta_ns(tsc::TscClock::now_tsc() - t0);
 
     std::free(msg);
 }
@@ -144,7 +95,7 @@ static void consumer_fn(BenchState *s) {
 
     for (uint64_t i = 0; i < s->n_msgs; ++i) {
         cons.pop(buf, s->msg_size);
-        s->latency_tsc[i] = rdtscp() - buf->send_tsc;
+        s->latency_tsc[i] = tsc::TscClock::now_tsc() - buf->send_tsc;
     }
 
     std::free(buf);
@@ -170,12 +121,10 @@ int main(int argc, char **argv) {
     if (msg_size < sizeof(uint64_t))
         msg_size = sizeof(uint64_t);
 
-    // Verify invariant TSC is available.
-    // tsc_known_freq implies constant_tsc + nonstop_tsc on Linux.
-    printf("=== SPSC bench (in-process, two threads) ===\n");
+    tsc::TscClock clk;  // calibrate once (~50 ms)
 
-    double tsc_ghz = calibrate_tsc_ghz();
-    printf("  TSC frequency: %.4f GHz\n", tsc_ghz);
+    printf("=== SPSC bench (in-process, two threads) ===\n");
+    printf("  TSC frequency: %.4f GHz\n", clk.ghz());
     printf("  messages     : %llu\n", (unsigned long long)n_msgs);
     printf("  msg_size     : %u B\n", msg_size);
     printf("  producer core: %d   consumer core: %d\n\n", prod_core, cons_core);
@@ -192,7 +141,7 @@ int main(int argc, char **argv) {
     state.msg_size  = msg_size;
     state.prod_core = prod_core;
     state.cons_core = cons_core;
-    state.tsc_ghz   = tsc_ghz;
+    state.clk       = &clk;
 
     std::thread cons_thr(consumer_fn, &state);
     producer_fn(&state);
@@ -200,10 +149,10 @@ int main(int argc, char **argv) {
 
     spsc::SharedBus::unlink(kBusName);
 
-    // Convert TSC latencies to ns.
+    // Convert TSC latencies to ns (offline — not in critical path).
     std::vector<double> lat_ns(n_msgs);
     for (uint64_t i = 0; i < n_msgs; ++i)
-        lat_ns[i] = tsc_to_ns(state.latency_tsc[i], tsc_ghz);
+        lat_ns[i] = clk.delta_ns(state.latency_tsc[i]);
 
     std::sort(lat_ns.begin(), lat_ns.end());
     double sum = 0;
