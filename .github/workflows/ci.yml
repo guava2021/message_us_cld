@@ -177,11 +177,58 @@ jobs:
           cd build_msan
           ctest --output-on-failure --timeout 60
 
-  # ── 6. Benchmark smoke (merge to main only) ──────────────────────────────────
+  # ── 6. TSan (clang only) ──────────────────────────────────────────────────────
+  # NOTE: continue-on-error because TSan uses a fixed shadow memory layout that
+  # is incompatible with POSIX shm_open+mmap at arbitrary addresses. This is a
+  # known TSan limitation with shared-memory workloads — not a race condition.
+  test-tsan:
+    name: tests (TSan)
+    runs-on: ubuntu-24.04
+    needs: build
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang
+
+      - name: Configure with TSan
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          rm -rf build_tsan
+          cmake -S . -B build_tsan \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSANITIZE=tsan \
+            -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build_tsan --parallel
+
+      - name: Run tests
+        run: |
+          export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1"
+          cd build_tsan
+          ctest --output-on-failure --timeout 60
+
+      - name: Check for shm leaks
+        if: always()
+        run: |
+          leaked=$(ls /dev/shm/spsc_* 2>/dev/null || true)
+          if [ -n "$leaked" ]; then
+            echo "WARNING: leaked shm segments: $leaked"
+            rm -f /dev/shm/spsc_*
+          fi
+
+  # ── 7. Benchmark smoke (merge to main only) ──────────────────────────────────
   bench-smoke:
     name: benchmark smoke
     runs-on: ubuntu-24.04
-    needs: [test-asan, test-msan]
+    needs: [test-asan, test-msan, test-tsan]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
       - uses: actions/checkout@v4

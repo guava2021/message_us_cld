@@ -198,54 +198,62 @@ See **[TIMING.md](TIMING.md)** for full detail on:
 
 ---
 
-### Phase 2 — Recovery & Fault Tolerance
+### Phase 2 — Recovery & Fault Tolerance ✅
 
-**A. Producer crash detection**
+**A. Producer crash detection** — implemented
 
-Problem: if the producer process dies, `write_pos` freezes and the consumer
-spins forever on an empty ring.
+`ControlBlock` now has `producer_pid` (written by `Producer` constructor) and
+`producer_heartbeat_ts`.  `Consumer::producer_status()` calls `kill(pid, 0)`:
+`ESRCH` → `PeerStatus::Dead`.  `Consumer::pop_checked()` checks liveness every
+N spins and returns 0 with `*peer_dead = true` when the producer is confirmed gone.
 
-Fix: add `producer_pid` and `producer_heartbeat_ts` fields to `ControlBlock`.
-The consumer periodically checks `kill(producer_pid, 0)` — if it returns
-`ESRCH`, the producer is dead.  The consumer can then abort, reconnect, or
-raise an alert.
+**B. Consumer crash detection** — implemented
 
-**B. Consumer crash detection**
+`consumer_pid` and `consumer_heartbeat_ts` in `ControlBlock`.
+`Producer::consumer_status()` and `Producer::push_checked()` mirror the above.
 
-Problem: if the consumer process dies, `read_pos` freezes, the ring fills, and
-the producer spins forever on a full ring.
+**C. Stale shared-memory segment on restart** — implemented
 
-Fix: add `consumer_pid` and `consumer_heartbeat_ts` to `ControlBlock`.  The
-producer detects the dead consumer and can choose to drop messages (lossy mode)
-or abort.
+`session_id` (random 64-bit, written at `create()`) is stored in `ControlBlock`
+cache line 0.  Both sides expose it via `SharedBus::session_id()`.  Callers can
+detect a producer restart by polling for a changed `session_id`.
 
-**C. Stale shared-memory segment on restart**
+**D. Consumer-first startup** — implemented
 
-Problem: a leftover shm segment from a previous run passes the `magic` check
-but contains stale `write_pos`/`read_pos` values or old message data.
+`SharedBus::open(name, timeout_ms)`:
+- `timeout_ms = 0` → no retry (previous behaviour)
+- `timeout_ms = -1` → retry indefinitely
+- `timeout_ms > 0` → retry for that many milliseconds, then throw
 
-Fix: add a `session_id` (random 64-bit value written at `create()`) to
-`ControlBlock`.  Both sides record the expected `session_id`; a mismatch on
-`open()` triggers an error or re-creation.
-
-**D. Consumer-first startup**
-
-Problem: `shm_open(O_RDWR)` in `open()` fails immediately with `ENOENT` if the
-producer has not yet called `create()`.
-
-Fix: wrap `shm_open` in a retry loop with a configurable timeout.  Also guard
-the `fstat` size check against the window between `shm_open` and `ftruncate`
-on the producer side (size may be 0 momentarily).
+Also guards the `fstat` size check against the `shm_open`/`ftruncate` race window.
 
 ---
 
-### Phase 3 — Production Hardening (future)
+### Phase 3 — Production Hardening ✅
 
-| Item | Rationale |
+| Item | Status |
 |---|---|
-| `mlock()` the shm segment | Prevent page faults on the hot path under memory pressure. |
-| `MAP_HUGETLB` | Reduce TLB pressure for large rings (≥ 2 MB). |
-| CPU affinity helpers | Expose `pthread_setaffinity_np` wrappers in the demo; pin producer and consumer to isolated physical cores. |
-| `CLOCK_MONOTONIC_RAW` | Eliminate NTP-induced jitter from latency measurements. |
-| Backpressure signal via `eventfd` | Allow a full-ring producer to sleep instead of burning a core, for mixed-criticality deployments. |
-| Lossy / overwrite mode | Optional flag to let the producer overwrite the oldest unread slot; requires per-slot generation counter in `SlotHeader._pad`. |
+| `mlock()` the shm segment | ✅ `BusOptions::lock_memory` — passed to `create()` / `open()` |
+| `MAP_HUGETLB` | ✅ `BusOptions::huge_pages` |
+| CPU affinity helpers | `bench_thread.cpp` has `pin_to_core()`; demo binaries expose it |
+| Backpressure signal via `eventfd` | ✅ `spsc::Notifier` — Linux only, in-process use |
+| Lossy / overwrite mode | ✅ `spsc::OverwriteProducer` — seqlock on `SlotHeader.generation`; `Consumer::try_pop_lossy()` detects overwrites and fast-forwards `read_pos` |
+
+**`OverwriteProducer` seqlock protocol:**
+
+```
+Push:
+  gen = slot.generation (relaxed load)
+  slot.generation = gen+1  (release)   ← odd = writing in progress
+  slot.size = size; memcpy payload
+  [release fence]
+  slot.generation = gen+2  (relaxed)   ← even = committed
+
+try_pop_lossy:
+  if write_pos - read_pos > capacity → fast-forward read_pos
+  gen1 = slot.generation (acquire)
+  if gen1 is odd → slot mid-write, retry
+  copy payload
+  gen2 = slot.generation (acquire)
+  if gen2 ≠ gen1 → overwrite detected, fast-forward, return 0 with overwritten=true
+```

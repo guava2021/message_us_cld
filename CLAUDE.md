@@ -10,3 +10,6 @@ write various test cases, with edge case in unit test
 # design 
 thinking about wrting software in HFT production grade. 
 First basic version, the add recovery, foult tolaranc scenerious you can think of in the following phases and give out suggestions.
+
+# rules
+do not automatically commit. I will need to review the code first.

@@ -55,18 +55,8 @@ int main(int argc, char **argv) {
            msg_size);
     fflush(stdout);
 
-    // Retry open — producer may not have created the segment yet.
-    spsc::SharedBus bus = [&]() -> spsc::SharedBus {
-        while (true) {
-            try {
-                return spsc::SharedBus::open(name);
-            } catch (...) {
-                struct timespec ts {};
-                ts.tv_nsec = 1'000'000;  // 1 ms
-                nanosleep(&ts, nullptr);
-            }
-        }
-    }();
+    // Retry open indefinitely — producer may not have created the segment yet.
+    spsc::SharedBus bus = spsc::SharedBus::open(name, /*timeout_ms=*/-1);
 
     spsc::Consumer cons(bus);
 
