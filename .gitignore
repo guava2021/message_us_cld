@@ -11,7 +11,9 @@ compile_commands.json
 producer
 consumer
 bench
-tests
+# 'tests' binary — use explicit path to avoid matching tests/ directory
+build/tests
+build_*/tests
 
 # ── sanitizer / profiling artifacts ──────────────────────────────────────────
 *.asan
