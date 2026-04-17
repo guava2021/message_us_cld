@@ -114,6 +114,7 @@ jobs:
           CC: clang
           CXX: clang++
         run: |
+          rm -rf build_asan
           cmake -S . -B build_asan \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
