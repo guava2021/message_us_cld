@@ -125,6 +125,19 @@ makes slot contents visible across cores without additional fences.
 
 ---
 
+## Timestamping Architecture
+
+See **[TIMING.md](TIMING.md)** for full detail on:
+- RDTSCP vs `clock_gettime` vDSO — when to use each
+- Why `clock_gettime` does not syscall on Linux (vDSO proof)
+- Benchmark measurement overhead (~10 cycles per message from two RDTSCP stamps)
+- TSC calibration against `CLOCK_MONOTONIC_RAW`
+- TSC ↔ `CLOCK_REALTIME` correlation for MiFID II audit timestamps
+- Background recalibration (software fallback without PTP NIC)
+- What HFT firms actually use at each pipeline layer
+
+---
+
 ## Performance Tuning Tips
 
 | Knob | Recommendation |
