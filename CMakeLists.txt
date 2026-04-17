@@ -59,6 +59,9 @@ target_link_libraries(consumer PRIVATE spsc_bus ${SPSC_LINK_LIBS})
 add_executable(bench bench_thread.cpp)
 target_link_libraries(bench PRIVATE spsc_bus ${SPSC_LINK_LIBS})
 
+add_executable(bench_clock bench_clock.cpp)
+target_link_libraries(bench_clock PRIVATE spsc_bus ${SPSC_LINK_LIBS})
+
 # ── unit tests (Google Test) ──────────────────────────────────────────────────
 include(CTest)
 if(BUILD_TESTING)
