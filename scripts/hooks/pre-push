@@ -21,7 +21,9 @@ echo "[pre-push] Starting pre-push checks..."
 if command -v clang-tidy &>/dev/null; then
     if [ -f "$BUILD_DIR/compile_commands.json" ]; then
         echo "[pre-push] Running clang-tidy..."
-        find "$REPO_ROOT" -maxdepth 1 -name '*.cpp' | \
+        find "$REPO_ROOT" -name '*.cpp' \
+            -not -path "$REPO_ROOT/build*" \
+            -not -path "$REPO_ROOT/.git/*" | \
             xargs clang-tidy -p "$BUILD_DIR" --quiet
         echo "[pre-push] clang-tidy: OK"
     else

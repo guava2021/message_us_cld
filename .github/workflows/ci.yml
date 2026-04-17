@@ -22,7 +22,8 @@ jobs:
 
       - name: Check formatting
         run: |
-          find . -maxdepth 1 -name '*.cpp' -o -name '*.hpp' | \
+          find . \( -name '*.cpp' -o -name '*.hpp' \) \
+               -not -path './build*' -not -path './.git/*' | \
             xargs clang-format --dry-run --Werror
           echo "clang-format: OK"
 
@@ -92,7 +93,7 @@ jobs:
 
       - name: Run clang-tidy
         run: |
-          find . -maxdepth 1 -name '*.cpp' | \
+          find . -name '*.cpp' -not -path './build*' -not -path './.git/*' | \
             xargs clang-tidy -p build --quiet
           echo "clang-tidy: OK"
 
@@ -247,7 +248,7 @@ jobs:
 
       - name: Run benchmark
         run: |
-          ./build_release/bench 2000000 64 0 2 | tee bench_output.txt
+          ./build_release/spsc_bench 2000000 64 0 2 | tee bench_output.txt
           echo "Benchmark output:"
           cat bench_output.txt
 
