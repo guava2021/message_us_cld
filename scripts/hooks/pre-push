@@ -38,6 +38,7 @@ if command -v cmake &>/dev/null; then
     cmake -S "$REPO_ROOT" -B "$BUILD_ASAN_DIR" \
         -DCMAKE_BUILD_TYPE=Debug \
         -DSANITIZE=asan \
+        -DBUILD_TESTING=ON \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
         -Wno-dev \
         > /dev/null 2>&1
